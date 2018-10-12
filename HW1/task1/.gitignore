@@ -1,0 +1,9 @@
+*.w2v
+data/*
+*.pkl
+*.joblib
+*.npy
+*.csv
+*.txt
+PRUNE
+res
