@@ -2,7 +2,7 @@
 HW2.pdf
 
 ### Spotlight
-make use of spotlight package, Deep Recommender models using PyTorch
+make use of spotlight package, Deep Recommender models using PyTorch\
 https://github.com/maciejkula/spotlight
 
 ### requirements
