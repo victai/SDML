@@ -1,0 +1,5 @@
+*.swp
+*.pt
+*.txt
+data/
+__pycache__
