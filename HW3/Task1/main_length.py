@@ -44,7 +44,7 @@ train_data = train_data[train_data.tgt_length < MAX_LEN]
 train_data = train_data[train_data.input_length < 50]
 reserved_idx = []
 for i in range(1, MAX_LEN):
-    reserved_idx.extend(train_data[train_data.tgt_length == i].index.values[:100].tolist())
+    reserved_idx.extend(train_data[train_data.tgt_length == i].index.values[:1000].tolist())
 reserved_idx.sort()
 train_data = train_data.iloc[reserved_idx]
 
@@ -169,7 +169,7 @@ def train(input_var, tgt_var, tgt_lengths, max_tgt_length, encoder, decoder, enc
         for i in range(max_tgt_length):
             tmp_tgt_lengths = torch.clamp(tgt_lengths - i, min=0)
             if args.attn:
-                decoder_output, decoder_hidden, decoder_attn = decoder(decoder_input, decoder_hidden, encoder_output, tmp_tgt_lengths)
+                decoder_output, decoder_hidden, _ = decoder(decoder_input, decoder_hidden, encoder_output, tmp_tgt_lengths)
             else:
                 decoder_output, decoder_hidden = decoder(decoder_input, decoder_hidden, tmp_tgt_lengths)
             loss += criterion(decoder_output.squeeze(0), tgt_var[i])

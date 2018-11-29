@@ -35,7 +35,7 @@ class DecoderLength(nn.Module):
         self.length_embedding = nn.Embedding(num_target_lengths, 10)
         self.gru = nn.GRU(hidden_dim+10, hidden_dim, num_layers=n_layers)
         self.output_layer = nn.Linear(hidden_dim, output_dim)
-        self.softmax = nn.LogSoftmax(dim=1)
+        self.softmax = nn.LogSoftmax(dim=2)
 
     def forward(self, input, hidden, lengths):
         embedded = self.embedding(input)
@@ -96,10 +96,11 @@ class Attn(nn.Module):
             attn_energies = attn_energies.cuda()
 
         # For each batch of encoder outputs
-        for b in range(batch_size):
+        #for b in range(batch_size):
             # Calculate energy for each encoder output
-            for i in range(max_len):
-                attn_energies[b, i] = self.score(hidden[:, b], encoder_outputs[i, b].unsqueeze(0))
+        #    for i in range(max_len):
+        #        attn_energies[b, i] = self.score(hidden[:, b], encoder_outputs[i, b].unsqueeze(0))
+        attn_energies = torch.bmm(encoder_outputs.transpose(0, 1), hidden.transpose(0, 1).transpose(1, 2)).squeeze(-1)
 
         # Normalize energies to weights in range 0 to 1, resize to 1 x B x S
         return F.softmax(attn_energies, dim=1).unsqueeze(1)
@@ -209,6 +210,7 @@ class LuongAttnDecoderLength(nn.Module):
 
         length_embedded = self.length_embedding(lengths)
         embedded = torch.cat((embedded, length_embedded), 2)
+        ipdb.set_trace()
 
         # Get current hidden state from input word and last hidden state
         rnn_output, hidden = self.gru(embedded, last_hidden)
@@ -227,8 +229,9 @@ class LuongAttnDecoderLength(nn.Module):
         concat_output = torch.tanh(self.concat(concat_input)) #[64, 512]
 
         # Finally predict next token (Luong eq. 6, without softmax)
-        output = self.out(concat_output) #[64, output_size]
+        output = self.out(rnn_output) #[64, output_size]
+        print(rnn_output.shape)
         output = F.softmax(output, dim=1)
 
         # Return final output, hidden state, and attention weights (for visualization)
-        return output, hidden, attn_weights
+        return output, hidden, 0#attn_weights
