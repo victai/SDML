@@ -25,27 +25,6 @@ class Encoder(nn.Module):
         return output, hidden
 
 
-class DecoderLength(nn.Module):
-    def __init__(self, hidden_dim, output_dim, num_target_lengths, n_layers=1):
-        super(DecoderLength, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.output_dim = output_dim
-
-        self.embedding = nn.Embedding(output_dim, hidden_dim)
-        self.length_embedding = nn.Embedding(num_target_lengths, 10)
-        self.gru = nn.GRU(hidden_dim+10, hidden_dim, num_layers=n_layers)
-        self.output_layer = nn.Linear(hidden_dim, output_dim)
-        self.softmax = nn.LogSoftmax(dim=2)
-
-    def forward(self, input, hidden, lengths):
-        embedded = self.embedding(input)
-        length_embedded = self.length_embedding(lengths)
-        output = torch.cat((embedded, length_embedded), 2)
-        output, hidden = self.gru(output, hidden)
-        output = self.softmax(self.output_layer(output))
-        
-        return output, hidden
-
 class DecoderAll(nn.Module):
     def __init__(self, hidden_dim, output_dim, num_target_lengths, num_pos, num_rhyme, n_layers=1):
         super(DecoderAll, self).__init__()
@@ -66,29 +45,6 @@ class DecoderAll(nn.Module):
         pos_embedded = self.pos_embedding(pos)
         rhyme_embedded = self.rhyme_embedding(rhyme)
         output = torch.cat((embedded, length_embedded, pos_embedded, rhyme_embedded), 2)
-        output, hidden = self.gru(output, hidden)
-        output = self.softmax(self.output_layer(output))
-        
-        return output, hidden
-
-class DecoderRhyme(nn.Module):
-    def __init__(self, hidden_dim, output_dim, num_target_lengths, num_rhymes, n_layers=1):
-        super(DecoderRhyme, self).__init__()
-        self.hidden_dim = hidden_dim
-        self.output_dim = output_dim
-
-        self.embedding = nn.Embedding(output_dim, hidden_dim)
-        self.length_embedding = nn.Embedding(num_target_lengths, 10)
-        self.rhyme_embedding = nn.Embedding(num_rhymes, 10)
-        self.gru = nn.GRU(hidden_dim+20, hidden_dim, num_layers=n_layers)
-        self.output_layer = nn.Linear(hidden_dim, output_dim)
-        self.softmax = nn.LogSoftmax(dim=1)
-
-    def forward(self, input, hidden, lengths, rhymes):
-        embedded = self.embedding(input)
-        length_embedded = self.length_embedding(lengths)
-        rhyme_embedded = self.rhyme_embedding(rhymes)
-        output = torch.cat((embedded, length_embedded, rhyme_embedded), 2)
         output, hidden = self.gru(output, hidden)
         output = self.softmax(self.output_layer(output))
         
@@ -201,7 +157,6 @@ class LuongAttnDecoderRNN(nn.Module):
 
         # Return final output, hidden state, and attention weights (for visualization)
         return output, hidden, attn_weights
-
 
 class LuongAttnDecoderLength(nn.Module):
     def __init__(self, attn_model, hidden_size, output_size, num_target_lengths, n_layers=1, dropout=0.1, use_cuda=True):

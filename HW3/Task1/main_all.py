@@ -7,6 +7,7 @@ import time
 from tqdm import tqdm
 from pypinyin import lazy_pinyin
 import jieba.posseg
+import subprocess
 
 import torch
 import torch.nn as nn
@@ -14,22 +15,27 @@ from torch.optim import Adam
 
 from model import Encoder, DecoderAll, LuongAttnDecoderLength
 
+
 parser = argparse.ArgumentParser()
-parser.add_argument("--create_data", action="store_true", default=False)
 parser.add_argument("--train", action="store_true", default=False)
 parser.add_argument("--attn", action="store_true", default=False)
 parser.add_argument("--test_data", type=str, default="../data/ta_input.txt")
 parser.add_argument("--output_file", type=str, default="result.txt")
 parser.add_argument("--encoder_path", type=str, default="encoder.pt")
 parser.add_argument("--decoder_path", type=str, default="decoder.pt")
-parser.add_argument("--use_cuda", action="store_true", default=True)
+parser.add_argument("--use_cuda", action="store_true", default=False)
 args = parser.parse_args()
+
+device = 'cpu'
+if args.use_cuda:
+    device = 'cuda'
 
 PAD_TOKEN = 'PAD' #0
 SOS_TOKEN = 'SOS' #1
 EOS_TOKEN = 'EOS' #2
 
-MAX_LEN = 31
+MAX_TGT_LEN = 31
+MAX_INPUT_LEN = 50
 
 ## Process Data Section
 
@@ -43,14 +49,15 @@ train_data['tgt_length'] = train_data['input'].apply(lambda x: int(x.split('NOE'
 train_data['input'] = train_data['input'].apply(lambda x: x.split('EOS')[0].strip().split(' ')[1:])
 train_data['target'] = train_data['target'].apply(lambda x: x.split(' ')[1:-1])
 train_data['input_length'] = train_data['input'].apply(lambda x: len(x))
-train_data = train_data[train_data.tgt_length < MAX_LEN]
-train_data = train_data[train_data.input_length < 50]
+train_data = train_data[train_data.tgt_length < MAX_TGT_LEN]
+train_data = train_data[train_data.input_length < MAX_INPUT_LEN]
+
+# take 1000 samples for each length
 reserved_idx = []
-for i in range(1, MAX_LEN):
+for i in range(1, MAX_TGT_LEN):
     reserved_idx.extend(train_data[train_data.tgt_length == i].index.values[:1000].tolist())
 reserved_idx.sort()
 train_data = train_data.iloc[reserved_idx]
-
 
 input_words = np.array([b for a in train_data['input'].values for b in a])
 target_words = np.array([b for a in train_data['target'].values for b in a])
@@ -96,18 +103,17 @@ target_pos = train_data.target_pos.values
 target_rhyme = train_data.target_rhyme.values
 
 
-max_input_length, max_target_length = MAX_LEN, MAX_LEN
 train_data.reset_index(inplace=True)
 
 for i, line in enumerate(target_pos):
-    line = np.hstack((line, [pos2idx_mapping["POS_PAD"] for k in range(max_target_length-len(line))]))
+    line = np.hstack((line, [pos2idx_mapping["POS_PAD"] for k in range(MAX_TGT_LEN-len(line))]))
     target_pos[i] = line
 target_pos = np.array(target_pos.tolist())
 
 train_data = list(zip(train_data.input, train_data.target))
 for i, (a, b) in enumerate(train_data):
-    a = np.hstack((a, [word2idx_mapping[PAD_TOKEN] for k in range(max_input_length-len(a))]))
-    b = np.hstack((b, [word2idx_mapping[PAD_TOKEN] for k in range(max_target_length-len(b))]))
+    a = np.hstack((a, [word2idx_mapping[PAD_TOKEN] for k in range(MAX_INPUT_LEN-len(a))]))
+    b = np.hstack((b, [word2idx_mapping[PAD_TOKEN] for k in range(MAX_TGT_LEN-len(b))]))
     train_data[i] = (a, b)
 train_data = np.array(train_data)
 
@@ -116,45 +122,46 @@ print("=== Process Data Done ==== Time cost {:.3f} secs".format(time.time() - t1
 ## Process Data End
 
 def predict(encoder, decoder):
-    test_df = pd.read_csv("/home/victai/SDML/HW3/Task1/data/hw3_1/all/test.csv", names=['input'])
-    test_df['pos'] = test_df['input'].apply(lambda x: x.split('EOS')[1].split('NOP')[0].strip().split(' ')[:MAX_LEN])
-    test_df['rhyme'] = test_df['input'].apply(lambda x: x.split('NOP')[1].split('NOE')[0].strip())
-    test_df['tgt_length'] = test_df['input'].apply(lambda x: min(int(x.split('NOE')[1].split('NOR')[0].strip()), MAX_LEN-1))
-    test_df['input'] = test_df['input'].apply(lambda x: x.split('EOS')[0].strip().split(' ')[1:50] + [EOS_TOKEN])
+    test_df = pd.read_csv(args.test_data, names=['input']).iloc[:3000]
+    test_df['tgt_pos'] = test_df['input'].apply(lambda x: x.split('EOS')[1].split('NOP')[0].strip().split(' ')[:MAX_TGT_LEN])
+    test_df['tgt_rhyme'] = test_df['input'].apply(lambda x: x.split('NOP')[1].split('NOE')[0].strip())
+    test_df['tgt_length'] = test_df['input'].apply(lambda x: min(int(x.split('NOE')[1].split('NOR')[0].strip()), MAX_TGT_LEN-1))
+    test_df['input'] = test_df['input'].apply(lambda x: x.split('EOS')[0].strip().split(' ')[1:MAX_INPUT_LEN+1] + [EOS_TOKEN])
     test_df['input'] = test_df['input'].apply(lambda x: [word2idx_mapping.get(i, 0) for i in x])
-    test_df['pos'] = test_df['pos'].apply(lambda x: [pos2idx_mapping.get(i, 0) for i in x])
-    test_df['tgt_rhyme'] = test_df['rhyme'].apply(lambda x: rhyme2idx_mapping.get(x, 0))
-    tgt_pos = test_df.pos.values
+    test_df['tgt_pos'] = test_df['tgt_pos'].apply(lambda x: [pos2idx_mapping.get(i, 0) for i in x])
+    test_df['mapped_tgt_rhyme'] = test_df['tgt_rhyme'].apply(lambda x: rhyme2idx_mapping.get(x, 0))
+    tgt_pos = test_df.tgt_pos.values
     padded_tgt_pos = np.copy(tgt_pos)
-    rhyme = test_df.rhyme.values
     tgt_rhyme = test_df.tgt_rhyme.values
+    mapped_tgt_rhyme = test_df.mapped_tgt_rhyme.values
     tgt_lengths = test_df.tgt_length.values
     max_length = max(tgt_lengths)
     test_df = test_df['input'].values
 
     for i in range(len(test_df)):
-        test_df[i] = np.hstack((test_df[i], [word2idx_mapping[PAD_TOKEN] for k in range(50 - len(test_df[i]))]))
-        padded_tgt_pos[i] = np.hstack((padded_tgt_pos[i], [pos2idx_mapping["POS_PAD"] for k in range(MAX_LEN - len(tgt_pos[i]))]))
+        test_df[i] = np.hstack((test_df[i], [word2idx_mapping[PAD_TOKEN] for k in range(MAX_INPUT_LEN - len(test_df[i]))]))
+        padded_tgt_pos[i] = np.hstack((padded_tgt_pos[i], [pos2idx_mapping["POS_PAD"] for k in range(MAX_TGT_LEN - len(tgt_pos[i]))]))
     test_df = np.array(test_df)
-    test_df = torch.LongTensor(test_df.tolist()).t().cuda()
+    test_df = torch.LongTensor(test_df.tolist()).t().to(device)
     padded_tgt_pos = np.array(padded_tgt_pos.tolist())
-    #tgt_pos = torch.LongTensor(tgt_pos.tolist()).t().cuda()
 
-    encoder = encoder.eval().cuda()
-    decoder = decoder.eval().cuda()
+    encoder = encoder.eval().to(device)
+    decoder = decoder.eval().to(device)
 
+    # predict
     batch_size = 1000
     result = [[] for i in range(max_length)]
-    for b in range(test_df.shape[1] // batch_size):
-        print(b, '\r', end='')
+    for b in tqdm(range(test_df.shape[1] // batch_size)):
         start = batch_size * b
         end = None if (b == (test_df.shape[1] // batch_size) - 1) else batch_size * (b+1)
+
         encoder_output, encoder_hidden = encoder(test_df[:, start: end])
         decoder_hidden = encoder_hidden
-        decoder_input = torch.LongTensor([[word2idx_mapping[SOS_TOKEN]]]).repeat(1, encoder_output.shape[1]).cuda()
-        batch_tgt_lengths = torch.from_numpy(tgt_lengths[start: end]).view(1, encoder_output.shape[1]).cuda()
-        batch_tgt_pos = torch.from_numpy(padded_tgt_pos.T[:, start:end]).long().cuda()
-        batch_tgt_rhyme = torch.from_numpy(tgt_rhyme[start: end]).view(1, encoder_output.shape[1]).cuda()
+        decoder_input = torch.LongTensor([[word2idx_mapping[SOS_TOKEN]]]).repeat(1, encoder_output.shape[1]).to(device)
+        batch_tgt_lengths = torch.from_numpy(tgt_lengths[start: end]).view(1, encoder_output.shape[1]).to(device)
+        batch_tgt_pos = torch.from_numpy(padded_tgt_pos.T[:, start:end]).long().to(device)
+        batch_tgt_rhyme = torch.from_numpy(mapped_tgt_rhyme[start: end]).view(1, encoder_output.shape[1]).to(device)
+
         for i in range(max_length):
             tmp_tgt_lengths = torch.clamp(batch_tgt_lengths - i, min=0)
             tmp_tgt_pos = batch_tgt_pos[i].unsqueeze(0)
@@ -165,14 +172,12 @@ def predict(encoder, decoder):
                 decoder_input = top1.squeeze(-1).unsqueeze(0)
             else:
                 decoder_output, decoder_hidden = decoder(decoder_input, decoder_hidden, tmp_tgt_lengths, tmp_tgt_pos, tmp_tgt_rhyme)
-                #_, top1 = decoder_output.topk(1, dim=2)
-                #decoder_input = top1.squeeze(-1)
-                _, top1 = decoder_output.topk(70, dim=2)
+                _, top1 = decoder_output.topk(70, dim=2)  # output top 70 for rhyme
                 decoder_input = top1[:,:,0].squeeze(-1)
                 result[i].extend(top1.cpu().numpy()[0].tolist())
-            #result[i].extend(decoder_input.cpu().numpy()[0].tolist())
+
+    # output
     result = np.transpose(np.array(result), (1,0,2))
-    #result = np.array(result).T
     res_len = np.zeros(result.shape[0])
     new_result = [[] for i in range(result.shape[0])]
     cnt = 0
@@ -183,15 +188,16 @@ def predict(encoder, decoder):
             for j, w in enumerate(res):
                 if (idx2word_mapping[w[0]] == EOS_TOKEN) or (j == len(res)-1):
                     res_len[i] = j
+
+                    # pick correct rhyme
                     for k, candidate in enumerate(last):
-                        if j > 0 and rhyme_corpus.get(idx2word_mapping.get(candidate, 0), 0) == rhyme[i]:
+                        if j > 0 and rhyme_corpus.get(idx2word_mapping.get(candidate, 0), 0) == tgt_rhyme[i]:
                             new_result[i][j-1] = idx2word_mapping.get(candidate, 0)
                             cnt += 1
                             break
-                    #if rhyme_corpus.get(idx2word_mapping.get(last[0], 0), 0) == rhyme[i]:
-                    #    cnt += 1
 
-                    all_pos_cnt += len(tgt_pos[i])
+                    # calculate POS accuracy
+                    all_pos_cnt += len(tgt_pos[i])    
                     if len(new_result[i]) > 0:
                         _, pos = zip(*jieba.posseg.cut(''.join(new_result[i])))
                         pos_len = min(len(pos), len(tgt_pos[i]))
@@ -201,7 +207,6 @@ def predict(encoder, decoder):
                         print("", file=f)
                         break
 
-
                     for k, c in enumerate(new_result[i]):
                         if k == len(new_result[i]) - 1:
                             print(c, file=f)
@@ -209,22 +214,15 @@ def predict(encoder, decoder):
                             print(c, end=' ', file=f)
                     break
                 new_result[i].append(idx2word_mapping[w[0]])
-                last = w
+                last = w  # save last timestep's output
     print('pos:', correct_pos_cnt / all_pos_cnt)
     print('rhyme:', cnt/result.shape[0])
-    '''
-    with open(args.output_file, "w") as f:
-        for i, res in enumerate(result):
-            for j, w in enumerate(res):
-                if (idx2word_mapping[w] == EOS_TOKEN) or (j == len(res)-1):
-                    res_len[i] = j
-                    print("", file=f)
-                    break
-                print(idx2word_mapping[w], end=' ', file=f)
-    '''
     print("length: ", sum(res_len == tgt_lengths) / res_len.shape[0])
 
-def train(input_var, tgt_var, tgt_lengths, max_tgt_length, tgt_pos, tgt_rhyme, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, use_cuda=False, validate=False):
+    output = subprocess.run(['python3', '/home/victai/SDML/HW3/trigram_model/trigram_evaluate.py', '--testing_data', args.output_file], stderr=subprocess.STDOUT)
+
+
+def train(input_var, tgt_var, tgt_lengths, max_tgt_length, tgt_pos, tgt_rhyme, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, validate=False):
 
     loss = 0
 
@@ -236,11 +234,11 @@ def train(input_var, tgt_var, tgt_lengths, max_tgt_length, tgt_pos, tgt_rhyme, e
     decoder_input = torch.LongTensor([[word2idx_mapping[SOS_TOKEN]]]).repeat(1, input_var.shape[1])
     tgt_lengths = torch.from_numpy(tgt_lengths).view(1, input_var.shape[1])
     tgt_rhyme = torch.from_numpy(tgt_rhyme).view(1, input_var.shape[1])
-    if use_cuda:
-        decoder_input = decoder_input.cuda()
-        tgt_lengths = tgt_lengths.cuda()
-        tgt_pos = tgt_pos.cuda()
-        tgt_rhyme = tgt_rhyme.cuda()
+
+    decoder_input = decoder_input.to(device)
+    tgt_lengths = tgt_lengths.to(device)
+    tgt_pos = tgt_pos.to(device)
+    tgt_rhyme = tgt_rhyme.to(device)
     
     teacher_forcing_ratio = 0.5
 
@@ -257,7 +255,6 @@ def train(input_var, tgt_var, tgt_lengths, max_tgt_length, tgt_pos, tgt_rhyme, e
                 decoder_output, decoder_hidden = decoder(decoder_input, decoder_hidden, tmp_tgt_lengths, input_pos, tgt_rhyme)
             loss += criterion(decoder_output.squeeze(0), tgt_var[i])
             decoder_input = tgt_var[i].unsqueeze(0)
-        #print("encode time:[{:.3f}], en_de time:[{:.3f}], teacher decode time[{:.3f}]".format(b-a, c-b, d_t-c))
 
     else:
         for i in range(max_tgt_length):
@@ -275,7 +272,6 @@ def train(input_var, tgt_var, tgt_lengths, max_tgt_length, tgt_pos, tgt_rhyme, e
             else:
                 _, top1 = decoder_output.topk(1, dim=2)
                 decoder_input = top1.squeeze(-1)
-        #print("encode time:[{:.3f}], en_de time:[{:.3f}], normal decode time[{:.3f}]".format(b-a, c-b, d-c))
 
     if not validate:
         loss.backward()
@@ -285,25 +281,25 @@ def train(input_var, tgt_var, tgt_lengths, max_tgt_length, tgt_pos, tgt_rhyme, e
     return loss.item() / max_tgt_length / input_var.shape[0]
 
 def main():
-    epoch = 1000
+    epoch = 100
     batch_size = 64
     hidden_dim = 300
-    use_cuda = True
 
     encoder = Encoder(num_words, hidden_dim)
     if args.attn:
         attn_model = 'dot'
-        decoder = LuongAttnDecoderLength(attn_model, hidden_dim, num_words, MAX_LEN)
+        decoder = LuongAttnDecoderLength(attn_model, hidden_dim, num_words, MAX_TGT_LEN)
     else:
-        decoder = DecoderAll(hidden_dim, num_words, MAX_LEN, len(all_pos), len(all_rhymes))
+        decoder = DecoderAll(hidden_dim, num_words, MAX_TGT_LEN, len(all_pos), len(all_rhymes))
 
     if args.train:
         weight = torch.ones(num_words)
         weight[word2idx_mapping[PAD_TOKEN]] = 0
-        if use_cuda:
-            encoder = encoder.cuda()
-            decoder = decoder.cuda()
-            weight = weight.cuda()
+
+        encoder = encoder.to(device)
+        decoder = decoder.to(device)
+        weight = weight.to(device)
+
         encoder_optimizer = Adam(encoder.parameters(), lr=0.001)
         decoder_optimizer = Adam(decoder.parameters(), lr=0.001)
         criterion = nn.CrossEntropyLoss(weight=weight)
@@ -312,7 +308,7 @@ def main():
         np.random.seed(1124)
         order = np.arange(len(train_data))
 
-        best_loss = 1e10
+        best_loss = 1e5
         best_epoch = 0
         
         for e in range(epoch):
@@ -326,17 +322,15 @@ def main():
             train_loss = 0
             valid_loss = 0
             for b in tqdm(range(int(len(order) // batch_size))):
-                #print(b, '\r', end='')
                 batch_x = torch.LongTensor(shuffled_train_data[b*batch_size: (b+1)*batch_size][:, 0].tolist()).t()
                 batch_y = torch.LongTensor(shuffled_train_data[b*batch_size: (b+1)*batch_size][:, 1].tolist()).t()
                 batch_y_lengths = shuffled_y_lengths[b*batch_size: (b+1)*batch_size]
                 batch_y_pos = torch.LongTensor(shuffled_y_pos[b*batch_size: (b+1)*batch_size]).t()
                 batch_y_rhyme = shuffled_y_rhyme[b*batch_size: (b+1)*batch_size]
 
-                if use_cuda:
-                    batch_x, batch_y = batch_x.cuda(), batch_y.cuda()
+                batch_x, batch_y = batch_x.to(device), batch_y.to(device)
 
-                train_loss += train(batch_x, batch_y, batch_y_lengths, max(batch_y_lengths), batch_y_pos, batch_y_rhyme, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, use_cuda, False)
+                train_loss += train(batch_x, batch_y, batch_y_lengths, max(batch_y_lengths), batch_y_pos, batch_y_rhyme, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, False)
 
             train_loss /= b
 
@@ -344,10 +338,9 @@ def main():
             for b in range(len(valid_data) // batch_size):
                 batch_x = torch.LongTensor(valid_data[b*batch_size: (b+1)*batch_size][:, 0].tolist()).t()
                 batch_y = torch.LongTensor(valid_data[b*batch_size: (b+1)*batch_size][:, 1].tolist()).t()
-                if use_cuda:
-                    batch_x, batch_y = batch_x.cuda(), batch_y.cuda()
+                batch_x, batch_y = batch_x.to(device), batch_y.to(device)
 
-                valid_loss += train(batch_x, batch_y, max_seqlen, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, use_cuda, True)
+                valid_loss += train(batch_x, batch_y, max_seqlen, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, True)
             valid_loss /= b
             '''
             print("epoch {}, train_loss {:.4f}, valid_loss {:.4f}, best_epoch {}, best_loss {:.4f}".format(e, train_loss, valid_loss, best_epoch, best_loss))
@@ -363,25 +356,18 @@ def main():
             torch.save(decoder.state_dict(), args.decoder_path)
         print(encoder)
         print(decoder)
-        print("==============")
 
     else:
-        if use_cuda:
-            encoder.load_state_dict(torch.load(args.encoder_path))
-            decoder.load_state_dict(torch.load(args.decoder_path))
-        else:
-            encoder.load_state_dict(torch.load(args.encoder_path, map_location=torch.device('cpu')))
-            decoder.load_state_dict(torch.load(args.decoder_path, map_location=torch.device('cpu')))
+        encoder.load_state_dict(torch.load(args.encoder_path, map_location=torch.device(device)))
+        decoder.load_state_dict(torch.load(args.decoder_path, map_location=torch.device(device)))
         print(encoder)
         print(decoder)
-
+    print("==========================================================")
 
     predict(encoder, decoder)
-    #submit()
 
 if __name__ == '__main__':
     main()
     
-
 
 # Reference Paper: https://aclweb.org/anthology/D16-1140
