@@ -46,6 +46,31 @@ class DecoderLength(nn.Module):
         
         return output, hidden
 
+class DecoderAll(nn.Module):
+    def __init__(self, hidden_dim, output_dim, num_target_lengths, num_pos, num_rhyme, n_layers=1):
+        super(DecoderAll, self).__init__()
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+
+        self.embedding = nn.Embedding(output_dim, hidden_dim)
+        self.length_embedding = nn.Embedding(num_target_lengths, 10)
+        self.pos_embedding = nn.Embedding(num_pos, 10)
+        self.rhyme_embedding = nn.Embedding(num_rhyme, 20)
+        self.gru = nn.GRU(hidden_dim+40, hidden_dim, num_layers=n_layers)
+        self.output_layer = nn.Linear(hidden_dim, output_dim)
+        self.softmax = nn.LogSoftmax(dim=2)
+
+    def forward(self, input, hidden, lengths, pos, rhyme):
+        embedded = self.embedding(input)
+        length_embedded = self.length_embedding(lengths)
+        pos_embedded = self.pos_embedding(pos)
+        rhyme_embedded = self.rhyme_embedding(rhyme)
+        output = torch.cat((embedded, length_embedded, pos_embedded, rhyme_embedded), 2)
+        output, hidden = self.gru(output, hidden)
+        output = self.softmax(self.output_layer(output))
+        
+        return output, hidden
+
 class DecoderRhyme(nn.Module):
     def __init__(self, hidden_dim, output_dim, num_target_lengths, num_rhymes, n_layers=1):
         super(DecoderRhyme, self).__init__()
@@ -100,6 +125,8 @@ class Attn(nn.Module):
             # Calculate energy for each encoder output
         #    for i in range(max_len):
         #        attn_energies[b, i] = self.score(hidden[:, b], encoder_outputs[i, b].unsqueeze(0))
+        if self.method == 'general':
+            encoder_outputs = self.attn(encoder_outputs)
         attn_energies = torch.bmm(encoder_outputs.transpose(0, 1), hidden.transpose(0, 1).transpose(1, 2)).squeeze(-1)
 
         # Normalize energies to weights in range 0 to 1, resize to 1 x B x S
@@ -210,10 +237,10 @@ class LuongAttnDecoderLength(nn.Module):
 
         length_embedded = self.length_embedding(lengths)
         embedded = torch.cat((embedded, length_embedded), 2)
-        ipdb.set_trace()
 
         # Get current hidden state from input word and last hidden state
         rnn_output, hidden = self.gru(embedded, last_hidden)
+        rnn_output = F.relu(rnn_output)
 
         # Calculate attention from current RNN state and all encoder outputs;
         # apply to encoder outputs to get weighted average
@@ -230,8 +257,7 @@ class LuongAttnDecoderLength(nn.Module):
 
         # Finally predict next token (Luong eq. 6, without softmax)
         output = self.out(rnn_output) #[64, output_size]
-        print(rnn_output.shape)
         output = F.softmax(output, dim=1)
 
         # Return final output, hidden state, and attention weights (for visualization)
-        return output, hidden, 0#attn_weights
+        return output, hidden, attn_weights

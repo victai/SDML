@@ -1,0 +1,10 @@
+ENV:
+    python3.5
+    pytorch v0.4.1
+    pypinyin v0.33.2
+    jieba v0.39
+    ipdb v0.11
+
+How to run:
+    bash predict.sh [input] [output]
+
