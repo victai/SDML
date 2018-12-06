@@ -5,14 +5,13 @@ import math
 import os
 
 from nltk import bigrams, trigrams
-import tensorflow as tf
 import jieba
 
 def dd():
     return collections.defaultdict(int)
 
 def _read_words(filename):
-  with tf.gfile.GFile(filename, "r") as f:
+  with open(filename, "r") as f:
     return f.read().replace("\n", " <eos> ").split()
 
 def main():
@@ -20,11 +19,11 @@ def main():
     parser.add_argument('--testing_data', default='output.csv')
     args = parser.parse_args()
     
-    f = open('trigram_model.pkl', 'rb')
+    f = open('/home/victai/SDML/HW3/trigram_model/trigram_model.pkl', 'rb')
     model = pickle.load(f)
     f.close()
     
-    f = open('w2i.pkl', 'rb')
+    f = open('/home/victai/SDML/HW3/trigram_model/w2i.pkl', 'rb')
     word_to_id = pickle.load(f)
     f.close()
     
