@@ -51,6 +51,25 @@ class DecoderAll(nn.Module):
         return output, hidden
 
 
+class DecoderTask1(nn.Module):
+    def __init__(self, hidden_dim, output_dim, n_layers=1):
+        super(DecoderTask1, self).__init__()
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+
+        self.embedding = nn.Embedding(output_dim, hidden_dim)
+        self.gru = nn.GRU(hidden_dim, hidden_dim, num_layers=n_layers)
+        self.output_layer = nn.Linear(hidden_dim, output_dim)
+        self.softmax = nn.LogSoftmax(dim=2)
+
+    def forward(self, input, hidden):
+        embedded = self.embedding(input)
+        output, hidden = self.gru(embedded, hidden)
+        output = self.softmax(self.output_layer(output))
+        
+        return output, hidden
+
+
 class Attn(nn.Module):
     def __init__(self, method, hidden_size, use_cuda=True):
         super(Attn, self).__init__()
